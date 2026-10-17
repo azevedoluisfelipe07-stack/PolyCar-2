@@ -131,6 +131,9 @@ input[type=range]{width:100%;accent-color:var(--sun)}
 .drift span{font-size:16px;color:var(--muted);font-variant-numeric:tabular-nums}
 .note{padding:12px 0;font-size:13px;color:var(--muted);border-bottom:1px solid rgba(255,255,255,.08)}
 @media (max-width:520px){.tb{width:72px;height:72px}#tGas{width:92px;height:92px}#slider{height:68px}}
+#modePick{z-index:7}
+.modePanel{width:min(420px,92vw);padding:28px;text-align:center;background:var(--glass-strong);border:1px solid var(--line);border-radius:24px;backdrop-filter:blur(14px)}
+.modePanel h2{margin:0 0 10px;font-size:32px;font-weight:300}.modePanel p{margin:0 0 22px;color:var(--muted);line-height:1.45}.modePanel .col{gap:10px}
 </style>
 </head>
 <body>
@@ -162,6 +165,8 @@ input[type=range]{width:100%;accent-color:var(--sun)}
  </div>
 </section>
 
+<div class="overlay" id="modePick"><div class="modePanel" role="dialog" aria-label="Escolher modo"><h2>Como quer dirigir?</h2><p>Explore a estrada no seu ritmo ou encare uma corrida de 2 km.</p><div class="col"><button class="btn primary" id="modeFree">Modo livre</button><button class="btn" id="modeRace">Corrida · 2 km</button><button class="btn" id="modeCancel">Voltar</button></div></div></div>
+<div class="overlay" id="raceFinish"><div class="modePanel" role="dialog" aria-label="Corrida concluída"><h2>Corrida concluída!</h2><p id="raceResult">Você completou 2 km.</p><div class="col"><button class="btn primary" id="raceAgain">Correr novamente</button><button class="btn" id="raceHome">Voltar ao início</button></div></div></div>
 <div id="hud">
  <div class="hudTL"><div id="hTime">00:00</div><div id="hDist">0,0 km</div></div>
  <div class="hudTR">
@@ -217,7 +222,7 @@ const wrapPi=a=>{while(a>Math.PI)a-=2*Math.PI;while(a<-Math.PI)a+=2*Math.PI;retu
 const isTouch=('ontouchstart' in window)||(navigator.maxTouchPoints>0);
 const isMobile=isTouch&&Math.min(screen.width,screen.height)<820;
 const store={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
-const DEF={quality:isMobile?'medio':'alto',shadows:isMobile?'med':'high',view:isMobile?1:2,scenery:isMobile?75:110,shadowDist:isMobile?60:85,exposure:100,saturation:100,vignette:20,tint:'natural',skid:true,drift:true,carQ:isMobile?1:2,res:isMobile?90:100,autoRes:true,fov:70,fog:100,clouds:true,showFps:false,
+const DEF={quality:isMobile?'medio':'alto',shadows:isMobile?'med':'high',view:isMobile?1:2,scenery:isMobile?75:110,shadowDist:isMobile?60:85,exposure:100,saturation:100,vignette:20,tint:'natural',skid:true,drift:true,waterQ:'auto',carQ:isMobile?1:2,res:isMobile?90:100,autoRes:true,fov:70,fog:100,clouds:true,showFps:false,
  volume:70,music:true,volMusic:80,volFx:100,sens:100,controls:'auto',autoGas:false,camDef:'third',shake:true,units:'kmh',traffic:2,hour:17.2,cycle:true,cycleSpeed:1};
 const S=Object.assign({},DEF,store.get('polycar.settings.v1',{}));
 if(S.quality==='baja'||S.quality==='baixa')S.quality='baixo';
@@ -247,8 +252,9 @@ function n2(x,y){const ix=Math.floor(x),iy=Math.floor(y),fx=x-ix,fy=y-iy,ux=fx*f
 /* ---------- estrada ---------- */
 const STEP=5,S0=-250,CN=32;
 const R={x:[0],y:[0],z:[S0],h:[0],k:[0]};
-function resetRoad(){R.x=[0];R.y=[0];R.z=[S0];R.h=[0];R.k=[0]}
-function elev(s){const r=sstep(0,500,s);return r*((n1(s/380+11.3)-.5)*2*9+(n1(s/130+3.1)-.5)*2*2.6+(n1(s/1500+7.7)-.5)*2*22)}
+function resetRoad(){R.x=[0];R.y=[0];R.z=[S0];R.h=[0];R.k=[0];_cx.clear();_pondC.clear()}
+function elev(s){return elevRaw(s)+deckOffset(s)}
+function elevRaw(s){const r=sstep(0,500,s);return r*((n1(s/380+11.3)-.5)*2*9+(n1(s/130+3.1)-.5)*2*2.6+(n1(s/1500+7.7)-.5)*2*22)}
 function curvNoise(s){const r=sstep(80,420,s);return r*(n1(s/190+5.5)-.5)*2*0.0066*(0.25+1.0*n1(s/800+9.1))}
 function ensureRoad(sT){
  let n=R.x.length;
@@ -283,7 +289,23 @@ function project(x,z,hint,o){
  const f=frame(s,_pf);o.s=s;o.d=(x-f.x)*f.rx+(z-f.z)*f.rz;o.ry=f.y;o.k=f.k;o.rx=f.rx;o.rz=f.rz;o.fx=f.fx;o.fz=f.fz;return o;
 }
 const _gp={};
-function groundAt(x,z,hint){const p=project(x,z,hint,_gp);return gY(p.ry,Math.abs(p.d),x,z)}
+function groundAt(x,z,hint,yRef){
+ const p=project(x,z,hint,_gp),ad=Math.abs(p.d);
+ if(ad<=6.4){
+  // Quem está bem abaixo do tabuleiro (na margem ou sob a ponte) não é "puxado" para cima da pista.
+  if(yRef!==undefined){const c=crossAt(p.s);if(c&&c.hw>=2&&yRef<p.ry-1.8)return carveY(p.ry-.12,p.s,ad)}
+  return p.ry+.03;
+ }
+ let y=carveY(gY(p.ry,ad,x,z),p.s,ad);
+ const ps=pondsNear(chunkOf(p.s));if(ps.length)y=deformForScenicLakes(y,x,z,ps);
+ return y;
+}
+function waterLevelAt(x,z,s,ground){
+ const c=crossAt(s);if(c&&c.hw>=2&&ground<c.W-.05)return c.W;
+ const ps=pondsNear(chunkOf(s));for(const l of ps)if(scenicLakeMetric(l,x,z)<1.1&&ground<l.level-.05)return l.level;
+ return null;
+}
+function camFloor(x,z,hint){const g=groundAt(x,z,hint),w=waterLevelAt(x,z,_gp.s,g);return w==null?g:Math.max(g,w+.2)}
 
 /* ---------- construtor de malha ---------- */
 class Mesher{
@@ -346,6 +368,112 @@ function addPrism(m,cx,cy,cz,w,d,h,rot,col){
 /* ---------- paleta ---------- */
 const PAL={grassA:lin('#86b25c'),grassB:lin('#74a352'),grassC:lin('#9bbd64'),dry:lin('#b9b66b'),fieldG:lin('#d9bc63'),fieldH:lin('#8fc25b'),fieldD:lin('#a7855d'),
  rock:lin('#8e8c86'),grav:lin('#9b958a'),dirt:lin('#8e7655'),asph:lin('#4a4c52'),lineW:lin('#ebe8dd'),lineY:lin('#e9c35d')};
+const BIOMES=[
+ {name:'Campos verdes',style:'broadleaf',grass:['#86b25c','#74a352','#9bbd64'],dry:'#b9b66b',tree:['#4f8a4a','#5c9a4f','#437a47'],rock:'#8e8c86'},
+ {name:'Deserto',style:'cactus',grass:['#c9ad70','#c3a263','#d7bb7b'],dry:'#d2a86b',tree:['#64864a','#728c4c','#8a9653'],rock:'#b48762'},
+ {name:'Outono',style:'autumn',grass:['#a28b52','#b77c45','#c49a54'],dry:'#c17b47',tree:['#c8753e','#d39a45','#9a643c'],rock:'#888078'},
+ {name:'Montanhas nevadas',style:'pine',grass:['#c6d0ce','#aebfbd','#d7dedb'],dry:'#e4e5df',tree:['#426b5a','#547d69','#688b78'],rock:'#89969a'},
+ {name:'Floresta',style:'broadleaf',grass:['#477b54','#3f704d','#588553'],dry:'#8b9860',tree:['#315f3b','#3c7045','#4d8050'],rock:'#656f61'},
+ {name:'Cânion',style:'canyon',grass:['#a97050','#956148','#b77c55'],dry:'#bd8b61',tree:['#6f7650','#83804e','#94764b'],rock:'#a56f55'},
+ {name:'Savana',style:'acacia',grass:['#b7a45b','#a7914d','#c5ad62'],dry:'#c59a57',tree:['#758448','#87904b','#9a9850'],rock:'#988667'},
+ {name:'Costa',style:'palm',grass:['#7cae9b','#6c9d91','#91b9a3'],dry:'#c6b77e',tree:['#54855b','#679563','#7ba16b'],rock:'#84928b'},
+ {name:'Taiga',style:'pine',grass:['#536f62','#496558','#607d69'],dry:'#879078',tree:['#34594c','#406756','#527663'],rock:'#737e79'}
+].map(b=>({name:b.name,style:b.style,grass:b.grass.map(lin),dry:lin(b.dry),tree:b.tree.map(lin),rock:lin(b.rock)}));
+const biomeAt=s=>Math.floor(Math.max(0,s)/1500)%BIOMES.length;
+function biomeBlend(s){const q=Math.max(0,s)/1500,i=Math.floor(q)%BIOMES.length,t=q-Math.floor(q);return{a:BIOMES[i],b:BIOMES[(i+1)%BIOMES.length],t:sstep(.82,1,t)}}
+/* Travessia sobre a água: o tabuleiro e o nível da água vêm do mesmo perfil, então a ponte nunca fica submersa. */
+const XP=2400,XA=850,XB=1120,XR=260,CLEAR=3.6;
+function lakeAt(s){const p=((s%XP)+XP)%XP;return s>0&&p>=XA&&p<XB}
+const _cx=new Map();
+function crossBase(k){let c=_cx.get(k);if(!c){const A=k*XP+XA,B=k*XP+XB,a=elevRaw(A),b=elevRaw(B);c={k,A,B,a,b,W:Math.min(a,b)-CLEAR};_cx.set(k,c)}return c}
+function deckProfile(c,s){const t=clamp((s-c.A)/(c.B-c.A),0,1);return lerp(c.a,c.b,t*t*(3-2*t))+.9*Math.sin(Math.PI*t)}
+function deckOffset(s){
+ if(!(s>0))return 0;const k=Math.floor(s/XP),p=s-k*XP;if(p<XA-XR||p>XB+XR)return 0;
+ const c=crossBase(k),bl=sstep(c.A-XR,c.A,s)*(1-sstep(c.B,c.B+XR,s));
+ return bl*(deckProfile(c,clamp(s,c.A,c.B))-elevRaw(s));
+}
+function crossAt(s){
+ if(!(s>0))return null;const k=Math.floor(s/XP),p=s-k*XP;if(p<XA-4||p>XB+4)return null;
+ const c=crossBase(k),m=sstep(c.A,c.A+30,s)*(1-sstep(c.B-30,c.B,s));
+ return{k,A:c.A,B:c.B,W:c.W,hw:m*(25+12*n1(s/70+k*13.7))};
+}
+function lakeLevel(s){const c=crossAt(s);return c?c.W:-1e9}
+function bridgeLift(){return 0}
+// Escava a bacia do rio/lago e ergue as margens acima da água.
+function carveY(y,s,ad){
+ const c=crossAt(s);if(!c||c.hw<2)return y;
+ const df=sstep(2,12,c.hw),q=ad/c.hw,W=c.W;let t;
+ if(q<.62)t=W-2.6;
+ else if(q<1)t=lerp(W-2.6,W+.25,sstep(.62,1,q));
+ else{const raised=Math.max(y,W+.25);t=q<1.8?lerp(W+.25,raised,sstep(1,1.8,q)):lerp(raised,y,sstep(1.8,3.2,q))}
+ return lerp(y,t,df);
+}
+const bridgeAt=lakeAt;
+function scenicLakes(chunkIndex){
+ if(chunkIndex<0||h2(chunkIndex+731,551)<.68)return[];
+ const s=S0+(chunkIndex*CN+CN/2)*STEP;
+ if([-100,-50,0,50,100].some(d=>bridgeAt(s+d))||n1(s/650+40)>.68)return[];
+ const side=h2(chunkIndex+913,17)<.5?-1:1;
+ const rx=18+h2(chunkIndex+121,53)*11,rz=13+h2(chunkIndex+337,89)*7;
+ const dist=48+h2(chunkIndex+487,29)*24,along=(h2(chunkIndex+643,71)-.5)*18;
+ const station=s+along,f=frame(station),cx=f.x+f.rx*side*dist,cz=f.z+f.rz*side*dist;
+ const p=project(cx,cz,station,{}),level=gY(p.ry,Math.abs(p.d),cx,cz);
+ let lo=Infinity,hi=-Infinity;
+ for(let i=0;i<12;i++){
+  const a=i/12*Math.PI*2,edge=1+.10*Math.sin(a*3+h2(chunkIndex+251,101)*6.2832)+.055*Math.sin(a*5-h2(chunkIndex+251,101)*6.2832)+.035*Math.sin(a*2+h2(chunkIndex+251,101)*10.681);
+  const alongEdge=Math.cos(a)*rx*1.35*edge,acrossEdge=Math.sin(a)*rz*1.35*edge;
+  const x=cx+Math.sin(f.h)*alongEdge-Math.cos(f.h)*acrossEdge,z=cz+Math.cos(f.h)*alongEdge+Math.sin(f.h)*acrossEdge;
+  const gp=project(x,z,station,{}),y=gY(gp.ry,Math.abs(gp.d),x,z);lo=Math.min(lo,y);hi=Math.max(hi,y);
+ }
+ if(hi-lo>8)return[];
+ return[{cx,cz,h:f.h,rx,rz,phase:h2(chunkIndex+251,101)*6.2832,level}];
+}
+function scenicLakeMetric(lake,x,z){
+ const dx=x-lake.cx,dz=z-lake.cz;
+ const along=dx*Math.sin(lake.h)+dz*Math.cos(lake.h);
+ const across=-dx*Math.cos(lake.h)+dz*Math.sin(lake.h);
+ const a=Math.atan2(across/lake.rz,along/lake.rx);
+ const edge=1+.10*Math.sin(a*3+lake.phase)+.055*Math.sin(a*5-lake.phase)+.035*Math.sin(a*2+lake.phase*1.7);
+ return Math.hypot(along/lake.rx,across/lake.rz)/edge;
+}
+function deformForScenicLakes(y,x,z,lakes){
+ for(const lake of lakes){
+  const q=scenicLakeMetric(lake,x,z);
+  if(q<.62)y=lake.level-2.2;
+  else if(q<.98)y=lerp(lake.level-2.2,lake.level-.04,sstep(.62,.98,q));
+  else if(q<2.4){const tgt=Math.max(y,lake.level+.12);y=q<1.55?lerp(lake.level-.04,tgt,sstep(.98,1.55,q)):lerp(tgt,y,sstep(1.55,2.4,q))}
+ }
+ return y;
+}
+const _pondC=new Map();
+function pondsOf(c){if(c<0)return[];let v=_pondC.get(c);if(!v){v=scenicLakes(c);_pondC.set(c,v)}return v}
+function pondsNear(c){const a=pondsOf(c-1),b=pondsOf(c),d=pondsOf(c+1);return(a.length||b.length||d.length)?[...a,...b,...d]:[]}
+class WMesher{
+ constructor(){this.p=[];this.d=[]}
+ tri(a,da,b,db,c,dc){
+  const ny=(b[2]-a[2])*(c[0]-a[0])-(b[0]-a[0])*(c[2]-a[2]);
+  if(ny<0){let t=b;b=c;c=t;t=db;db=dc;dc=t}
+  this.p.push(a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2]);this.d.push(da,db,dc);
+ }
+ geo(){const g=new T.BufferGeometry();g.setAttribute('position',new T.Float32BufferAttribute(this.p,3));g.setAttribute('aDepth',new T.Float32BufferAttribute(this.d,1));g.computeBoundingSphere();return g}
+}
+function pondDepth(r){return r<.62?2.2:r<.98?lerp(2.2,.04,sstep(.62,.98,r)):lerp(.04,-.12,sstep(.98,1.55,r))}
+function addScenicLakeW(wm,lake,ox,oy,oz){
+ const rings=[0,.3,.5,.7,.85,.98,1.1,1.25],n=40;
+ const point=(r,i)=>{
+  const a=i/n*Math.PI*2,edge=1+.10*Math.sin(a*3+lake.phase)+.055*Math.sin(a*5-lake.phase)+.035*Math.sin(a*2+lake.phase*1.7);
+  const along=Math.cos(a)*lake.rx*r*edge,across=Math.sin(a)*lake.rz*r*edge;
+  return[lake.cx+Math.sin(lake.h)*along-Math.cos(lake.h)*across-ox,lake.level-oy,lake.cz+Math.cos(lake.h)*along+Math.sin(lake.h)*across-oz];
+ };
+ const center=[lake.cx-ox,lake.level-oy,lake.cz-oz];
+ let prev=Array.from({length:n},(_,i)=>point(rings[1],i));
+ for(let i=0;i<n;i++)wm.tri(center,pondDepth(0),prev[i],pondDepth(rings[1]),prev[(i+1)%n],pondDepth(rings[1]));
+ for(let r=2;r<rings.length;r++){
+  const next=Array.from({length:n},(_,i)=>point(rings[r],i)),d0=pondDepth(rings[r-1]),d1=pondDepth(rings[r]);
+  for(let i=0;i<n;i++){const i2=(i+1)%n;wm.tri(prev[i],d0,next[i],d1,next[i2],d1);wm.tri(prev[i],d0,next[i2],d1,prev[i2],d0)}
+  prev=next;
+ }
+}
 const TREEG=['#4f8a4a','#5c9a4f','#437a47','#3f7345'].map(lin),TREEO=['#6fae4f','#86b957','#c2a94a','#d08a4a','#5e9d49'].map(lin);
 const TRUNK=lin('#6b4f36'),GREY=lin('#5a5f66'),WOOD=lin('#7a6247'),LAMPC=lin('#fff2c4'),ROCKC=lin('#8c8a84'),BUSH=lin('#5f9a47');
 const WALLS=['#e9ddc4','#d9bca0','#c8d3d6','#e4c5b3','#b9c9aa','#d8d6d0','#e8cf9a','#b7c4d8'].map(lin);
@@ -356,47 +484,74 @@ const pick=(a,r)=>a[Math.floor(r()*a.length)];
 const LAT=[-150,-105,-75,-52,-36,-24,-16,-10,-6.4,0,6.4,10,16,24,36,52,75,105,150],NR=LAT.length;
 let QL={dens:1,ahead:5,shadow:2048,dpr:2,carQ:2};
 const MAT={};
-function terrainColor(cx,cz,ad,ny,rise,ii){
- let c;
+function terrainColor(cx,cz,ad,ny,rise,ii,biome=0){
+ let c;const blend=typeof biome==='number'?{a:BIOMES[biome]||BIOMES[0],b:BIOMES[biome]||BIOMES[0],t:0}:biome;
+ const bp=blend.a,bq=blend.b,bt=blend.t,grass=i=>mixc(bp.grass[i],bq.grass[i],bt),dry=mixc(bp.dry,bq.dry,bt),rock=mixc(bp.rock,bq.rock,bt);
  if(ad<7.2)c=PAL.grav;
  else{
   const g=h2(Math.floor(cx/11),Math.floor(cz/11));
-  c=g<.33?PAL.grassA:g<.66?PAL.grassB:PAL.grassC;
+  c=grass(g<.33?0:g<.66?1:2);
   if(ad<12)c=mixc(PAL.grav,c,(ad-7.2)/4.8);
   if(ny>0.9&&isField(cx,cz,ad)){const fh=h2(Math.floor(cx/64)*7+13,Math.floor(cz/64)*11+5);c=fh>.86?PAL.fieldD:fh>.74?PAL.fieldG:PAL.fieldH;if(ii&1)c=tint(c,.94)}
-  else if(rise>16)c=mixc(c,PAL.dry,clamp((rise-16)/20,0,.6));
-  if(ny<0.86)c=mixc(c,PAL.rock,clamp((0.86-ny)*6,0,.85));else if(ny<0.93)c=mixc(c,PAL.dirt,.4);
+  else if(rise>16)c=mixc(c,dry,clamp((rise-16)/20,0,.6));
+  if(ny<0.86)c=mixc(c,rock,clamp((0.86-ny)*6,0,.85));else if(ny<0.93)c=mixc(c,PAL.dirt,.4);
  }
  return tint(c,0.94+0.12*h2(Math.floor(cx*0.7),Math.floor(cz*0.7)+3));
 }
-function buildTerrain(fr,ox,oy,oz){
- const m=new Mesher(),gx=[],gy=[],gz=[],ga=[];
- for(let ii=0;ii<=CN;ii++){const f=fr[ii];for(let j=0;j<NR;j++){
+const SAND=lin('#b9ac88'),BEDC=lin('#6d6a56');
+function buildTerrain(fr,ox,oy,oz,chunkIndex){
+ const m=new Mesher(),gx=[],gy=[],gz=[],ga=[],ponds=pondsNear(chunkIndex);
+ for(let ii=0;ii<=CN;ii++){const f=fr[ii],sS=S0+(chunkIndex*CN+ii)*STEP;for(let j=0;j<NR;j++){
   const de=latClamp(LAT[j],f.k),x=f.x+f.rx*de,z=f.z+f.rz*de,ad=Math.abs(de),q=ii*NR+j;
-  gx[q]=x-ox;gy[q]=(ad<=6.4?f.y-0.12:gY(f.y,ad,x,z))-oy;gz[q]=z-oz;ga[q]=ad}}
+  let y=ad<=6.4?f.y-0.12:gY(f.y,ad,x,z);
+  y=carveY(y,sS,ad);
+  if(ad>6.4&&ponds.length)y=deformForScenicLakes(y,x,z,ponds);
+  gx[q]=x-ox;gy[q]=y-oy;gz[q]=z-oz;ga[q]=ad}}
  for(let ii=0;ii<CN;ii++)for(let j=0;j<NR-1;j++){
-  if(j===8||j===9)continue;
+  const sS=S0+(chunkIndex*CN+ii)*STEP,cr=crossAt(sS+STEP/2);
+  if((j===8||j===9)&&!cr)continue;
   const qa=ii*NR+j,qb=(ii+1)*NR+j,qc=qb+1,qd=qa+1;
   const A=[gx[qa],gy[qa],gz[qa]],Bv=[gx[qb],gy[qb],gz[qb]],C=[gx[qc],gy[qc],gz[qc]],D=[gx[qd],gy[qd],gz[qd]];
   const ux=C[0]-A[0],uz=C[2]-A[2],vx=Bv[0]-A[0],vz=Bv[2]-A[2],uy=C[1]-A[1],vy=Bv[1]-A[1];
   let nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;const l=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;ny=Math.abs(ny/l);
   const cx=(A[0]+C[0])/2+ox,cz=(A[2]+C[2])/2+oz,ad=(ga[qa]+ga[qc])/2,rise=A[1]+oy-fr[ii].y;
-  const col=terrainColor(cx,cz,ad,ny,rise,ii);
+  let col=terrainColor(cx,cz,ad,ny,rise,ii,biomeBlend(sS));
+  if(cr){const yM=(A[1]+Bv[1]+C[1]+D[1])/4+oy,sh=1-sstep(cr.W+.05,cr.W+1.0,yM);if(sh>0)col=mixc(col,SAND,sh*.8);const dp=sstep(cr.W-.3,cr.W-1.5,yM);if(dp>0)col=mixc(col,BEDC,dp*.9)}
+  for(const pond of ponds){const q=scenicLakeMetric(pond,cx,cz),shore=sstep(.82,1.05,q)*(1-sstep(1.05,1.55,q));if(shore>0)col=mixc(col,SAND,shore*.72);if(q<.9)col=mixc(col,BEDC,sstep(.9,.5,q)*.85)}
   m.tri(A,C,Bv,col,{up:true});m.tri(A,D,C,tint(col,.97+0.06*h2(ii,j)),{up:true});
  }
- return m.geo();
+ const g=m.geo();g.userData={gx,gy,gz};return g;
 }
-function addTree(pb,x,y,z,rng){
- const s=.8+rng()*.9,sides=QL.dens>1.25?10:QL.dens>.8?8:6;
- if(rng()<.5){
-  const c=pick(TREEG,rng);
+function addTree(pb,x,y,z,rng,biome=0){
+ const s=.8+rng()*.9,sides=QL.dens>1.25?10:QL.dens>.8?8:6,b=BIOMES[biome]||BIOMES[0],c=pick(b.tree,rng);
+ if(b.style==='cactus'){
+  addCone(pb,x,y-.12,z,.24*s,2.7*s,7,c,0,.2*s);
+  addBox(pb,x-.34*s,y+.82*s,z,.16*s,1.05*s,.16*s,0,c);addBox(pb,x-.25*s,y+1.3*s,z,.48*s,.16*s,.16*s,0,c);
+  addBox(pb,x+.34*s,y+1.12*s,z,.16*s,.86*s,.16*s,0,tint(c,.9));addBox(pb,x+.25*s,y+1.48*s,z,.48*s,.16*s,.16*s,0,tint(c,.9));
+ }else if(b.style==='acacia'){
+  addCone(pb,x,y-.15,z,.24*s,2.9*s,6,TRUNK,0,.16*s);
+  addIco(pb,x,y+3.2*s,z,2.3*s,.72*s,1.7*s,c,rng,.22);
+  addIco(pb,x+.65*s,y+3.0*s,z-.2*s,1.15*s,.58*s,1.05*s,tint(c,1.08),rng,.2);
+ }else if(b.style==='palm'){
+  addCone(pb,x,y-.15,z,.27*s,3.3*s,7,TRUNK,0,.12*s);
+  for(let j=0;j<7;j++){const a=j*Math.PI*2/7,dx=Math.cos(a),dz=Math.sin(a);addCone(pb,x+dx*.7*s,y+3.2*s,z+dz*.7*s,.18*s,1.55*s,5,c,a,.035*s)}
+  addIco(pb,x,y+3.2*s,z,.5*s,.42*s,.5*s,tint(c,1.12),rng,.18);
+ }else if(b.style==='canyon'){
+  addCone(pb,x,y-.15,z,.18*s,1.5*s,6,TRUNK,0,.12*s);
+  addIco(pb,x,y+2.1*s,z,1.45*s,1.3*s,1.45*s,c,rng,.3);
+  addIco(pb,x+.65*s,y+1.7*s,z+.25*s,1.0*s,.9*s,1.0*s,tint(c,1.12),rng,.28);
+ }else if(b.style==='pine'){
+  addCone(pb,x,y-.15,z,.25*s,1.5*s,6,TRUNK,0,.13*s);
+  addCone(pb,x,y+.7*s,z,1.5*s,2.0*s,sides,c,rng()*6);
+  addCone(pb,x,y+1.9*s,z,1.15*s,1.8*s,sides,tint(c,1.08),rng()*6);
+  addCone(pb,x,y+3.0*s,z,.75*s,1.6*s,sides,tint(c,1.15),rng()*6);
+  if(biome===3)addCone(pb,x,y+3.85*s,z,.28*s,.55*s,6,lin('#edf2f2'));
+ }else if(rng()<.58){
   addCone(pb,x,y-.15,z,.28*s,1.8*s,6,TRUNK,0,.2*s);
   addCone(pb,x,y+1.0*s,z,2.1*s,3.0*s,sides,c,rng()*6);
   addCone(pb,x,y+2.4*s,z,1.65*s,2.7*s,sides,tint(c,1.06),rng()*6);
   addCone(pb,x,y+3.7*s,z,1.15*s,2.4*s,sides,tint(c,1.12),rng()*6);
-  if(sides>=10)for(let j=0;j<4;j++){const a=j*Math.PI/2+s*.3;addIco(pb,x+Math.cos(a)*.9*s,y+(2.1+(j%2)*.8)*s,z+Math.sin(a)*.9*s,.8*s,1.05*s,.8*s,tint(c,1.02+j*.025),rng,.18)}
  }else{
-  const c=pick(TREEO,rng);
   addCone(pb,x,y-.15,z,.3*s,2.4*s,6,TRUNK,0,.2*s);
   addIco(pb,x,y+3.2*s,z,2.1*s,1.9*s,2.1*s,c,rng,.25);
   addIco(pb,x+.9*s,y+2.5*s,z+.4*s,1.3*s,1.2*s,1.3*s,tint(c,.92),rng,.25);
@@ -450,7 +605,7 @@ function farFromRoad(mx,mz,minD,iA,iB){
  for(let i=Math.max(0,iA);i<=iB;i+=2){const dx=R.x[i]-mx,dz=R.z[i]-mz;if(dx*dx+dz*dz<m2)return false}
  return true;
 }
-function makeMtn(v){
+function makeMtn(v,biome=0){
  const g=new T.ConeGeometry(1,1,8,4,true),p=g.attributes.position;
  for(let i=0;i<p.count;i++){
   const x=p.getX(i),y=p.getY(i),z=p.getZ(i),kx=Math.round(x*10),ky=Math.round(y*10),kz=Math.round(z*10);
@@ -461,51 +616,51 @@ function makeMtn(v){
  g.translate(0,.5,0);
  const ng=g.toNonIndexed();ng.computeVertexNormals();
  const pos=ng.attributes.position,cols=[];
- const lo=[lin('#5d8a54'),lin('#6f9a58'),lin('#587f52')],rock=[lin('#8a8f93'),lin('#7d8388')],snow=lin('#f2f5f7');
+ const bp=BIOMES[biome]||BIOMES[0],lo=bp.grass,rock=[bp.rock,tint(bp.rock,.88)],snow=lin('#f2f5f7'),snowBiome=biome===3;
  for(let i=0;i<pos.count;i+=3){
   const yf=(pos.getY(i)+pos.getY(i+1)+pos.getY(i+2))/3,r=h2(i+v*131,17);
-  let c=yf<.3?lo[Math.floor(r*3)]:yf<.7?rock[Math.floor(r*2)]:snow;
-  if(yf>.62&&yf<.78&&r>.5)c=snow;
+  let c=yf<.3?lo[Math.floor(r*3)]:yf<.7?rock[Math.floor(r*2)]:(snowBiome?snow:tint(bp.rock,1.18));
+  if(snowBiome&&yf>.62&&yf<.78&&r>.5)c=snow;
   c=tint(c,.9+r*.2);for(let k=0;k<3;k++)cols.push(c[0],c[1],c[2]);
  }
  ng.setAttribute('color',new T.Float32BufferAttribute(cols,3));ng.computeBoundingSphere();return ng;
 }
-let MTN=null;
+let MTN=[];
 
 const chunks=new Map();
 function placeProps(i0,fr,ox,oy,oz,rng,pb,gb,obsC,obsB){
- const dens=QL.dens,lastEnd=[-1e9,-1e9];
+ const dens=QL.dens,lastEnd=[-1e9,-1e9],ponds=pondsNear(Math.floor(i0/CN));
  for(let ii=0;ii<CN;ii++){
   const f=fr[ii],s=S0+(i0+ii)*STEP;
-  const forest=n1(s/420+20),town=n1(s/650+40),farm=n1(s/900+60);
+  if(lakeAt(s))continue;
+  const forest=n1(s/420+20),town=n1(s/650+40),farm=n1(s/900+60),biome=biomeAt(s);
   const isTown=town>0.68&&s>300,k=f.k;
   for(let side=-1;side<=1;side+=2){
    const th=side>0?f.h+Math.PI/2:f.h-Math.PI/2,si=(side+1)>>1;
-   const place=(dist,along)=>{const de=latClamp(side*dist,k),ad=Math.abs(de),x=f.x+f.rx*de+f.fx*along,z=f.z+f.rz*de+f.fz*along;return{x,z,ad,y:gY(f.y,ad,x,z)}};
+   const place=(dist,along)=>{const de=latClamp(side*dist,k),ad=Math.abs(de),x=f.x+f.rx*de+f.fx*along,z=f.z+f.rz*de+f.fz*along;return{x,z,ad,y:gY(f.y,ad,x,z),pond:ponds.some(l=>scenicLakeMetric(l,x,z)<1.5)}};
    if(isTown){
     const kind=rng()<.4?'house':rng()<.45?'shop':rng()<.7?'block':'warehouse',dm=bdims(kind,rng);
     if(s-dm.w/2>lastEnd[si]&&rng()<.6){
      const p=place(11.5+dm.d/2+rng()*4,0);
-     addBuilding(pb,gb,p.x-ox,p.y-oy,p.z-oz,th+(rng()-.5)*.1,kind,dm,rng);
-     obsB.push({x:p.x,z:p.z,rot:th,w:dm.w,d:dm.d});lastEnd[si]=s+dm.w/2+2;
+     if(!p.pond){addBuilding(pb,gb,p.x-ox,p.y-oy,p.z-oz,th+(rng()-.5)*.1,kind,dm,rng);obsB.push({x:p.x,z:p.z,rot:th,w:dm.w,d:dm.d});lastEnd[si]=s+dm.w/2+2}
     }
     if(ii%5===0){const p=place(8.6,0);addLamp(pb,gb,p.x-ox,p.y-oy,p.z-oz,th);obsC.push([p.x,p.z,.3])}
-    if(rng()<.1*dens){const p=place(14+rng()*40,rng()*4-2);addTree(pb,p.x-ox,p.y-oy,p.z-oz,rng)}
+    if(rng()<.1*dens){const p=place(14+rng()*40,rng()*4-2);if(!p.pond)addTree(pb,p.x-ox,p.y-oy,p.z-oz,rng)}
    }else{
     const lam=dens*(.12+1.25*sstep(.35,.78,forest));
     let n=Math.floor(lam)+(rng()<lam-Math.floor(lam)?1:0);
     while(n-->0){
      const p=place(10+Math.pow(rng(),1.5)*105,(rng()-.5)*STEP);
      if(isField(p.x,p.z,p.ad)&&rng()<.9)continue;
-     addTree(pb,p.x-ox,p.y-oy,p.z-oz,rng);if(p.ad<30)obsC.push([p.x,p.z,.6]);
+     if(!p.pond){addTree(pb,p.x-ox,p.y-oy,p.z-oz,rng,biome);if(p.ad<30)obsC.push([p.x,p.z,.6])}
     }
-    if(rng()<.22*dens){const p=place(9+rng()*12,0),b=.6+rng()*.7;addIco(pb,p.x-ox,p.y-oy+.4*b,p.z-oz,1.1*b,.8*b,1.1*b,BUSH,rng,.3)}
-    if(rng()<.035*dens){const p=place(9+rng()*40,0),b=.7+rng()*1.4;addIco(pb,p.x-ox,p.y-oy+.3*b,p.z-oz,b,.7*b,b*.9,ROCKC,rng,.35);if(p.ad<24)obsC.push([p.x,p.z,b*.8])}
+    if(rng()<.22*dens){const p=place(9+rng()*12,0),b=.6+rng()*.7;if(!p.pond)addIco(pb,p.x-ox,p.y-oy+.4*b,p.z-oz,1.1*b,.8*b,1.1*b,BUSH,rng,.3)}
+    if(rng()<.035*dens){const p=place(9+rng()*40,0),b=.7+rng()*1.4;if(!p.pond){addIco(pb,p.x-ox,p.y-oy+.3*b,p.z-oz,b,.7*b,b*.9,ROCKC,rng,.35);if(p.ad<24)obsC.push([p.x,p.z,b*.8])}}
     if(farm>.4&&rng()<.012){
      const p=place(30+rng()*20,0),dm=bdims('house',rng);
-     addBuilding(pb,gb,p.x-ox,p.y-oy,p.z-oz,th,'house',dm,rng);obsB.push({x:p.x,z:p.z,rot:th,w:dm.w,d:dm.d});
+     if(!p.pond){addBuilding(pb,gb,p.x-ox,p.y-oy,p.z-oz,th,'house',dm,rng);obsB.push({x:p.x,z:p.z,rot:th,w:dm.w,d:dm.d})}
      const q=place(30+rng()*20,18),bm=bdims('barn',rng);
-     addBuilding(pb,gb,q.x-ox,q.y-oy,q.z-oz,th,'barn',bm,rng);obsB.push({x:q.x,z:q.z,rot:th,w:bm.w,d:bm.d});
+     if(!q.pond){addBuilding(pb,gb,q.x-ox,q.y-oy,q.z-oz,th,'barn',bm,rng);obsB.push({x:q.x,z:q.z,rot:th,w:bm.w,d:bm.d})}
     }
     if(farm>.45&&ii%10===0&&side>0){const p=place(9,0);addPole(pb,p.x-ox,p.y-oy,p.z-oz,th);obsC.push([p.x,p.z,.3])}
    }
@@ -515,37 +670,102 @@ function placeProps(i0,fr,ox,oy,oz,rng,pb,gb,obsC,obsB){
   }
  }
 }
+const BR={conc:lin('#a5a49d'),concD:lin('#74746f'),steel:lin('#d3dadf'),steelD:lin('#7b8791'),joint:lin('#2b2c30'),reed:[lin('#8a9a4a'),lin('#a7a255'),lin('#6f8a45')]};
+function stripBox(m,Pt,f0,f1,d0,d1,y0,y1,col,bottom){
+ const dm=(d0+d1)/2,ym=(y0+y1)/2,a=Pt(f0,dm,ym),b=Pt(f1,dm,ym),o={ctr:[(a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2]};
+ m.quad(Pt(f0,d0,y1),Pt(f1,d0,y1),Pt(f1,d1,y1),Pt(f0,d1,y1),col,o);
+ m.quad(Pt(f0,d0,y0),Pt(f1,d0,y0),Pt(f1,d0,y1),Pt(f0,d0,y1),tint(col,.88),o);
+ m.quad(Pt(f0,d1,y0),Pt(f1,d1,y0),Pt(f1,d1,y1),Pt(f0,d1,y1),tint(col,.88),o);
+ if(bottom)m.quad(Pt(f0,d0,y0),Pt(f1,d0,y0),Pt(f1,d1,y0),Pt(f0,d1,y0),tint(col,.7),o);
+}
 function buildChunk(c){
  const i0=c*CN;ensureRoad(S0+(i0+CN+260)*STEP);
  const fr=[];for(let ii=0;ii<=CN;ii++)fr.push(sampleFrame(i0+ii));
  const o=fr[0],ox=o.x,oy=o.y,oz=o.z;
  const grp=new T.Group();grp.position.set(ox,oy,oz);
  const rng=mulberry32((c*7919+SEED)|0),geos=[];
- const tg=buildTerrain(fr,ox,oy,oz);geos.push(tg);
+ const tg=buildTerrain(fr,ox,oy,oz,c);geos.push(tg);
  const tm=new T.Mesh(tg,MAT.terrain);tm.receiveShadow=true;grp.add(tm);
- const rd=new Mesher(),ln=new Mesher();
+
+ const rd=new Mesher(),ln=new Mesher(),rails=new Mesher(),glowB=new Mesher(),wmesh=new WMesher(),grid=tg.userData;
  for(let ii=0;ii<CN;ii++){
-  const f0=fr[ii],f1=fr[ii+1];
+  const f0=fr[ii],f1=fr[ii+1],s=S0+(i0+ii)*STEP,lake=lakeAt(s);
   const Pt=(f,d,dy)=>[f.x+f.rx*d-ox,f.y+dy-oy,f.z+f.rz*d-oz];
   rd.quad(Pt(f0,-6.2,.03),Pt(f1,-6.2,.03),Pt(f1,6.2,.03),Pt(f0,6.2,.03),tint(PAL.asph,.95+.08*h2(i0+ii,77)),{up:true});
   for(const sd of[-1,1])ln.quad(Pt(f0,sd*5.62,.05),Pt(f1,sd*5.62,.05),Pt(f1,sd*5.38,.05),Pt(f0,sd*5.38,.05),PAL.lineW,{up:true});
   if(((i0+ii)&1)===0)ln.quad(Pt(f0,-.09,.05),Pt(f1,-.09,.05),Pt(f1,.09,.05),Pt(f0,.09,.05),PAL.lineY,{up:true});
+  if(!lake)continue;
+  const cb=crossBase(Math.floor(s/XP)),idx=i0+ii;
+  // tabuleiro, vigas e guarda-corpo
+  stripBox(rails,Pt,f0,f1,-6.9,6.9,-.9,.02,BR.conc,true);
+  for(const sd of[-1,1]){
+   stripBox(rails,Pt,f0,f1,sd*4.7,sd*5.4,-1.8,-.9,BR.concD,true);
+   stripBox(rails,Pt,f0,f1,sd>0?5.76:-6.1,sd>0?6.1:-5.76,.02,.5,BR.conc);
+   for(const rh of[.78,1.1])stripBox(rails,Pt,f0,f1,sd>0?5.86:-5.98,sd>0?5.98:-5.86,rh,rh+.09,BR.steel);
+   for(const t of[0,.5]){const fm={x:lerp(f0.x,f1.x,t),y:lerp(f0.y,f1.y,t),z:lerp(f0.z,f1.z,t),rx:f0.rx,rz:f0.rz};
+    addBox(rails,fm.x+fm.rx*sd*5.92-ox,fm.y+.5-oy,fm.z+fm.rz*sd*5.92-oz,.1,.7,.1,f0.h,BR.steelD)}
+   if(idx%5===0){const th=sd>0?f0.h+Math.PI/2:f0.h-Math.PI/2;addLamp(rails,glowB,f0.x+f0.rx*sd*6.55-ox,f0.y+.02-oy,f0.z+f0.rz*sd*6.55-oz,th)}
+  }
+  if(idx%6===0){const fb={x:lerp(f0.x,f1.x,.05),y:lerp(f0.y,f1.y,.05),z:lerp(f0.z,f1.z,.05),rx:f0.rx,rz:f0.rz};
+   ln.quad(Pt(f0,-6.2,.05),Pt(fb,-6.2,.05),Pt(fb,6.2,.05),Pt(f0,6.2,.05),BR.joint,{up:true})}
+  // pilares
+  if(idx%6===0&&s>cb.A+24&&s<cb.B-24){
+   const bed=grid.gy[ii*NR+9]+oy-.3,yCap=f0.y-2.7,h=yCap-bed;
+   if(h>.6){
+    addBox(rails,f0.x-ox,yCap-oy,f0.z-oz,13.4,.9,2.4,f0.h,BR.conc);
+    for(const sd of[-1,1]){const px=f0.x+f0.rx*sd*3.5-ox,pz=f0.z+f0.rz*sd*3.5-oz;
+     addCone(rails,px,bed-oy,pz,1.25,h,8,BR.conc,0,1.0);addCone(rails,px,bed-oy,pz,1.9,.8,8,BR.concD,0,1.4)}
+   }
+  }
+  // encontros e pórticos nas cabeceiras
+  if((s>=cb.A&&s<cb.A+STEP)||(s>=cb.B-STEP&&s<cb.B)){
+   addBox(rails,f0.x-ox,f0.y-3.4-oy,f0.z-oz,15,3.4,3,f0.h,BR.concD);
+   for(const sd of[-1,1]){const px=f0.x+f0.rx*sd*6.7-ox,pz=f0.z+f0.rz*sd*6.7-oz;
+    addBox(rails,px,f0.y-oy,pz,.6,2.1,.6,f0.h,BR.conc);addBox(rails,px,f0.y+2.1-oy,pz,.85,.16,.85,f0.h,BR.concD)}
+  }
+  // água
+  const W=cb.W-oy;
+  for(let j=1;j<NR-2;j++){
+   const qa=ii*NR+j,qb=(ii+1)*NR+j,qc=qb+1,qd=qa+1,qs=[qa,qb,qc,qd];
+   const dep=qs.map(q=>W-grid.gy[q]);if(Math.max(...dep)<-.3)continue;
+   const V=qs.map(q=>[grid.gx[q],W,grid.gz[q]]);
+   wmesh.tri(V[0],dep[0],V[2],dep[2],V[1],dep[1]);wmesh.tri(V[0],dep[0],V[3],dep[3],V[2],dep[2]);
+  }
  }
- const rg=rd.geo(),lg=ln.geo();geos.push(rg,lg);
+ for(const pond of pondsOf(c))addScenicLakeW(wmesh,pond,ox,oy,oz);
+ const rg=rd.geo(),lg=ln.geo(),wg=wmesh.geo(),bg=rails.geo();geos.push(rg,lg,wg,bg);
  const rm=new T.Mesh(rg,MAT.road);rm.receiveShadow=true;grp.add(rm);
  const lm=new T.Mesh(lg,MAT.line);lm.receiveShadow=true;grp.add(lm);
+ if(wmesh.p.length){const wm=new T.Mesh(wg,MAT.water);wm.renderOrder=1;wm.frustumCulled=true;grp.add(wm)}
+ if(rails.p.length){const bm=new T.Mesh(bg,MAT.bridge);bm.castShadow=true;bm.receiveShadow=true;grp.add(bm)}
+ if(glowB.p.length){const g=glowB.geo();geos.push(g);grp.add(new T.Mesh(g,MAT.glow))}
  const pb=new Mesher(),gb=new Mesher(),obsC=[],obsB=[];
  placeProps(i0,fr,ox,oy,oz,rng,pb,gb,obsC,obsB);
+ for(let ii=0;ii<CN;ii++){
+  const sS=S0+(i0+ii)*STEP;if(!lakeAt(sS))continue;const cc=crossAt(sS);if(!cc)continue;
+  const dep=j=>cc.W-(grid.gy[ii*NR+j]+oy);
+  for(const sd of[-1,1]){
+   let j0=-1;
+   if(sd>0){for(let j=10;j<NR-1;j++)if(dep(j)>0&&dep(j+1)<=0){j0=j;break}}
+   else{for(let j=8;j>0;j--)if(dep(j)>0&&dep(j-1)<=0){j0=j;break}}
+   if(j0<0)continue;
+   const j1=sd>0?j0+1:j0-1,t=dep(j0)/(dep(j0)-dep(j1)),q0=ii*NR+j0,q1=ii*NR+j1;
+   const px=lerp(grid.gx[q0],grid.gx[q1],t),py=lerp(grid.gy[q0],grid.gy[q1],t),pz=lerp(grid.gz[q0],grid.gz[q1],t);
+   if(rng()<.55*Math.max(.4,QL.dens)){const nR=3+Math.floor(rng()*3);for(let r=0;r<nR;r++){const a=rng()*6.28,rr=rng()*1.1;addCone(pb,px+Math.cos(a)*rr,py-.12,pz+Math.sin(a)*rr,.05,1.0+rng()*.9,4,pick(BR.reed,rng),0,.012)}}
+   if(rng()<.2){const b=.5+rng()*.8;addIco(pb,px+(rng()-.5)*2,py+.15*b,pz+(rng()-.5)*2,b,.6*b,b*.9,ROCKC,rng,.35)}
+  }
+ }
  if(pb.p.length){const g=pb.geo();geos.push(g);const m=new T.Mesh(g,MAT.prop);m.castShadow=true;m.receiveShadow=true;grp.add(m)}
  if(gb.p.length){const g=gb.geo();geos.push(g);grp.add(new T.Mesh(g,MAT.glow))}
- if(!MTN)MTN=[makeMtn(1),makeMtn(2),makeMtn(3)];
+ if(!MTN.length)MTN=BIOMES.map((_,bi)=>[makeMtn(1+bi*4,bi),makeMtn(2+bi*4,bi),makeMtn(3+bi*4,bi)]);
+ const mountainSet=MTN[biomeAt(S0+(i0+CN/2)*STEP)];
  for(let side=-1;side<=1;side+=2){
   if(rng()<.2)continue;
   const f=fr[Math.floor(rng()*CN)];
   const lat=300+rng()*230;let rad=170+rng()*140;const hg=100+rng()*190,vi=Math.floor(rng()*3),ry=rng()*6.28;
   const mx=f.x+f.rx*side*lat,mz=f.z+f.rz*side*lat;
   if(!farFromRoad(mx,mz,rad*.85+80,i0-60,i0+CN+240)){rad*=.6;if(!farFromRoad(mx,mz,rad*.85+80,i0-60,i0+CN+240))continue}
-  const mm=new T.Mesh(MTN[vi],MAT.mtn);mm.scale.set(rad,hg,rad);mm.rotation.y=ry;mm.position.set(mx-ox,f.y-40-oy,mz-oz);grp.add(mm);
+  const mm=new T.Mesh(mountainSet[vi],MAT.mtn);mm.scale.set(rad,hg,rad);mm.rotation.y=ry;mm.position.set(mx-ox,f.y-40-oy,mz-oz);grp.add(mm);
  }
  scene.add(grp);
  return{c,grp,geos,obsC,obsB};
@@ -585,10 +805,48 @@ const hemi=new T.HemisphereLight(0xffffff,0x445533,.6);scene.add(hemi);
 const sun=new T.DirectionalLight(0xffffff,1.5);sun.castShadow=true;scene.add(sun,sun.target);
 {const sc=sun.shadow.camera;sc.left=-80;sc.right=80;sc.top=80;sc.bottom=-80;sc.near=1;sc.far=460;sun.shadow.bias=-.0004;sun.shadow.normalBias=.35}
 MAT.terrain=new T.MeshStandardMaterial({vertexColors:true,roughness:1,metalness:0});
-MAT.road=new T.MeshStandardMaterial({vertexColors:true,roughness:.92,metalness:0,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-1});
+MAT.road=new T.MeshStandardMaterial({vertexColors:true,roughness:.99,metalness:0,envMapIntensity:90,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-1});
 MAT.line=new T.MeshStandardMaterial({vertexColors:true,roughness:.8,metalness:0,polygonOffset:true,polygonOffsetFactor:-3,polygonOffsetUnits:-3});
 MAT.prop=new T.MeshStandardMaterial({vertexColors:true,roughness:.9,metalness:0});
 MAT.mtn=new T.MeshStandardMaterial({vertexColors:true,roughness:1,metalness:0});
+const WATER=new T.ShaderMaterial({
+ uniforms:T.UniformsUtils.merge([T.UniformsLib.fog,{uTime:{value:0},uTop:{value:new T.Color()},uMid:{value:new T.Color()},uHor:{value:new T.Color()},uSunDir:{value:new T.Vector3(0,1,0)},uSunCol:{value:new T.Color()},uShallow:{value:new T.Color()},uDeep:{value:new T.Color()},uNight:{value:0},uSunVis:{value:1},uQ:{value:2},uDay:{value:1}}]),
+ vertexShader:'attribute float aDepth;varying vec3 vWorld;varying float vDepth;\n#include <fog_pars_vertex>\nvoid main(){vec4 wp=modelMatrix*vec4(position,1.0);vWorld=wp.xyz;vDepth=aDepth;vec4 mvPosition=viewMatrix*wp;gl_Position=projectionMatrix*mvPosition;\n#include <fog_vertex>\n}',
+ fragmentShader:[
+ 'uniform float uTime;uniform vec3 uTop;uniform vec3 uMid;uniform vec3 uHor;uniform vec3 uSunDir;uniform vec3 uSunCol;uniform vec3 uShallow;uniform vec3 uDeep;uniform float uNight;uniform float uSunVis;uniform float uQ;uniform float uDay;',
+ 'varying vec3 vWorld;varying float vDepth;',
+ '#include <fog_pars_fragment>',
+ 'vec3 skyCol(vec3 d){float h=max(d.y,0.0);vec3 c=mix(uHor,uMid,smoothstep(0.0,0.22,h));c=mix(c,uTop,smoothstep(0.18,0.75,h));float sd=max(dot(d,normalize(uSunDir)),0.0);c+=uSunCol*(pow(sd,40.0)*0.35+pow(sd,6.0)*0.12)*uSunVis;return c;}',
+ 'float hash21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}',
+ 'float vnoise(vec2 p){vec2 i=floor(p);vec2 f=fract(p);f=f*f*(3.0-2.0*f);return mix(mix(hash21(i),hash21(i+vec2(1.0,0.0)),f.x),mix(hash21(i+vec2(0.0,1.0)),hash21(i+vec2(1.0,1.0)),f.x),f.y);}',
+ 'vec2 waveD(vec2 p,vec2 dir,float k,float sp,float amp){float ph=dot(p,dir)*k+uTime*sp;return dir*cos(ph)*k*amp;}',
+ 'void main(){',
+ ' vec3 V=normalize(cameraPosition-vWorld);vec2 p=vWorld.xz;',
+ ' vec2 g=waveD(p,normalize(vec2(1.0,0.35)),0.55,1.1,0.12)+waveD(p,normalize(vec2(-0.4,1.0)),0.9,1.5,0.07);',
+ ' if(uQ>0.5)g+=waveD(p,normalize(vec2(0.7,-0.8)),1.7,2.1,0.04);',
+ ' if(uQ>1.5){g+=waveD(p,normalize(vec2(-0.9,-0.3)),2.9,2.8,0.022);g+=(vec2(vnoise(p*1.3+uTime*0.3),vnoise(p*1.3-uTime*0.25+7.0))-0.5)*0.07;}',
+ ' float dist=length(cameraPosition-vWorld);g*=1.0-clamp(dist/320.0,0.0,0.9);',
+ ' vec3 N=normalize(vec3(-g.x,1.0,-g.y));',
+ ' float ndv=max(dot(N,V),0.0);float fres=0.03+0.97*pow(1.0-ndv,4.0);',
+ ' vec3 R=reflect(-V,N);R.y=abs(R.y);vec3 refl=skyCol(R);',
+ ' float depth=clamp(vDepth/2.2,0.0,1.0);',
+ ' vec3 body=mix(uShallow,uDeep,smoothstep(0.0,0.8,depth));',
+ ' vec3 col=mix(body,refl,clamp(fres+0.12,0.0,1.0));',
+ ' float sg=pow(max(dot(R,normalize(uSunDir)),0.0),uQ>1.5?500.0:200.0);col+=uSunCol*sg*3.0*uSunVis;',
+ ' col+=vec3(0.6,0.7,1.0)*pow(max(dot(R,-normalize(uSunDir)),0.0),400.0)*uNight*0.8;',
+ ' float shore=1.0-smoothstep(0.0,0.28,vDepth);float foam=shore*0.35;',
+ ' if(uQ>0.5){float fn=vnoise(p*2.2+vec2(uTime*0.35,-uTime*0.2));foam=shore*smoothstep(0.35,0.75,fn+shore*0.4);}',
+ ' col=mix(col,vec3(0.9,0.95,0.97)*(0.25+0.75*uDay),foam*0.75);',
+ ' float alpha=smoothstep(0.0,0.10,vDepth)*(0.82+0.16*fres);',
+ ' gl_FragColor=vec4(col,alpha);',
+ '#include <tonemapping_fragment>',
+ '#include <encodings_fragment>',
+ '#include <fog_fragment>',
+ '}'].join('\n'),
+ transparent:true,depthWrite:false,fog:true
+});
+MAT.water=WATER;
+MAT.bridge=new T.MeshStandardMaterial({vertexColors:true,roughness:.82,metalness:.05,side:T.DoubleSide});
 MAT.glow=new T.MeshBasicMaterial({vertexColors:true});
 
 const SKYK=[
@@ -631,6 +889,13 @@ const clouds=[];
 }
 let hour=S.hour,night=0,dayF=1;
 const sunDirV=new T.Vector3();
+const WSH=lin('#3aa7a2'),WDP=lin('#0b3a66');
+function updateWaterUniforms(k,e){
+ const u=WATER.uniforms,lv=lerp(.12,1,sstep(-.15,.25,e));
+ u.uTop.value.setRGB(...k.top);u.uMid.value.setRGB(...k.mid);u.uHor.value.setRGB(...k.hor);u.uSunDir.value.copy(sunDirV);u.uSunCol.value.setRGB(...k.sun);
+ u.uShallow.value.setRGB(WSH[0]*lv,WSH[1]*lv,WSH[2]*lv);u.uDeep.value.setRGB(WDP[0]*lv,WDP[1]*lv,WDP[2]*lv);
+ u.uNight.value=1-sstep(-.2,0,e);u.uSunVis.value=sstep(-.12,.02,e);u.uDay.value=lv;u.uTime.value=performance.now()/1000;
+}
 function updateSky(dt,cx,cz){
  if(S.cycle)hour=(hour+dt/[150,90,45][S.cycleSpeed??1])%24;
  const phi=(hour-6)/12*Math.PI;
@@ -648,6 +913,7 @@ function updateSky(dt,cx,cz){
  hemi.color.setRGB(...k.mid);hemi.groundColor.setRGB(...mixc(lin('#3a3f2e'),lin('#6b7a4a'),dayF));hemi.intensity=lerp(.26,.62,dayF);
  const g=night;MAT.glow.color.setRGB(lerp(.42,1,g),lerp(.5,1,g),lerp(.58,1,g));
  const cl=mixc([1,1,1],k.hor,clamp(1-e*3,0,.7)),lv=lerp(.16,1,sstep(-.15,.25,e));
+ updateWaterUniforms(k,e);
  cloudMat.color.setRGB(cl[0]*lv,cl[1]*lv,cl[2]*lv);cloudMat.emissive.setRGB(cl[0]*lv*.45,cl[1]*lv*.45,cl[2]*lv*.45);
  for(const c of clouds){
   c.userData.a+=dt*.004*c.userData.dx;
@@ -670,9 +936,10 @@ function applyLook(){renderer.toneMappingExposure=(S.exposure||100)/100;canvas.s
 let fogFar=700,resScale=1,wantRebuild=false,wantCars=false;
 function applyAdvancedGraphics(){
  const p=GRAPHICS_LEVELS[S.quality]||{ao:S.shadows==='off'?0:.16,bloom:.12,blur:.018,reflection:.3};
+ {const wq=(S.waterQ==null||S.waterQ==='auto')?({baixo:0,medio:1,alto:2,ultra:2})[S.quality]??1:S.waterQ;WATER.uniforms.uQ.value=wq}
  postFX.ao=postAvailable?p.ao:0;postFX.bloom=p.bloom;postFX.blur=p.blur;
  postMat.uniforms.uAO.value=postFX.ao;postMat.uniforms.uBloom.value=postFX.bloom;postMat.uniforms.uBlur.value=postFX.blur;
- MAT.road.roughness=lerp(.94,.36,p.reflection);MAT.road.metalness=lerp(0,.12,p.reflection);MAT.road.envMapIntensity=p.reflection*1.55;
+ MAT.road.roughness=.98;MAT.road.metalness=0;MAT.road.envMapIntensity=p.reflection*.08;
  MAT.prop.envMapIntensity=p.reflection*.7;MAT.terrain.envMapIntensity=p.reflection*.25;MAT.mtn.envMapIntensity=p.reflection*.3;
  for(const k in matCache){const m=matCache[k];m.envMapIntensity=p.reflection*.9}
 }
@@ -825,7 +1092,7 @@ function carMeshUpdateWheels(car,spinDelta,steerAng){
 
 /* ---------- estado do jogo ---------- */
 let state='loading',paused=false,gameTimer=0,dist=0,simT=0;
-const P={drifting:false,slip:0,x:0,y:0,z:0,psi:0,vx:0,vz:0,steer:0,pitchS:0,rollS:0,s:40,d:2.9,ay:0,vFprev:0,hit:0,bob:0,spd:0};
+const P={inWater:false,wl:0,wd:0,drifting:false,slip:0,x:0,y:0,z:0,psi:0,vx:0,vz:0,steer:0,pitchS:0,rollS:0,s:40,d:2.9,ay:0,vFprev:0,hit:0,bob:0,spd:0};
 let curIdx=G.car||0,CUR=null,pcar=null,spot=null;
 const traffic=[];
 const allCars=()=>{const a=traffic.map(t=>t.mesh);if(pcar)a.push(pcar);return a};
@@ -845,7 +1112,7 @@ function makePlayerCar(){
  scene.add(pcar);
 }
 function placeOnRoad(s,d,speed){
- const f=frame(s);P.s=s;P.d=d;P.x=f.x+f.rx*d;P.z=f.z+f.rz*d;P.psi=f.h;P.vx=f.fx*speed;P.vz=f.fz*speed;P.steer=0;P.y=f.y+.03;P.pitchS=0;P.rollS=0;
+ const f=frame(s);P.s=s;P.d=d;P.x=f.x+f.rx*d;P.z=f.z+f.rz*d;P.psi=f.h;P.vx=f.fx*speed;P.vz=f.fz*speed;P.steer=0;P.y=f.y+bridgeLift(s)+.03;P.pitchS=0;P.rollS=0;
 }
 
 /* ---------- trânsito ---------- */
@@ -881,10 +1148,10 @@ function updateTraffic(dt,refS){
   const dT=(t.dir>0?2.9:-2.9)+t.off+Math.sin(simT*.3+t.ph)*.3;
   t.vd+=(6*(dT-t.d)-4.5*t.vd)*dt;t.d+=t.vd*dt;
   const f=frame(t.s,_ab),f2=frame(t.s+2,_ac),f1=frame(t.s-2,_af);
-  const slope=(f2.y-f1.y)/4;
+  const slope=(f2.y+bridgeLift(t.s+2)-f1.y-bridgeLift(t.s-2))/4;
   const x=f.x+f.rx*t.d,z=f.z+f.rz*t.d;
   t.x=x;t.z=z;t.psi=f.h+(t.dir>0?0:Math.PI)-t.dir*Math.atan2(t.vd,Math.max(t.speed,1));
-  const m=t.mesh;m.position.set(x,f.y+.03,z);m.rotation.y=t.psi;m.rotation.x=-Math.atan(slope)*t.dir;
+  const m=t.mesh;m.position.set(x,f.y+bridgeLift(t.s)+.03,z);m.rotation.y=t.psi;m.rotation.x=-Math.atan(slope)*t.dir;
   carMeshUpdateWheels(m,t.speed*dt,0);
  }
 }
@@ -943,6 +1210,16 @@ function collisions(){
    if(h){P.x+=h.nx*h.depth;P.z+=h.nz*h.depth;const vn=P.vx*h.nx+P.vz*h.nz;if(vn<0){P.vx-=1.2*vn*h.nx;P.vz-=1.2*vn*h.nz;impact(vn)}}
   }
  }
+ const bp=project(P.x,P.z,P.s,_gs);
+ if(bridgeAt(bp.s)&&P.y>bp.ry-1.6){
+  // Keep the car footprint inside the guardrail's inner edge, accounting for its width.
+  const limit=Math.max(0,5.76-td.W*.5),side=bp.d<0?-1:1,over=Math.abs(bp.d)-limit;
+  if(over>0){
+   P.x-=bp.rx*side*over;P.z-=bp.rz*side*over;
+   const outward=P.vx*bp.rx*side+P.vz*bp.rz*side;
+   if(outward>0){P.vx-=bp.rx*side*outward*1.25;P.vz-=bp.rz*side*outward*1.25;impact(outward)}
+  }
+ }
 }
 
 /* ---------- física do jogador ---------- */
@@ -951,6 +1228,7 @@ function stepPlayer(dt,inp){
  const car=CUR,td=car.td;
  const fx=Math.sin(P.psi),fz=Math.cos(P.psi),rx=-Math.cos(P.psi),rz=Math.sin(P.psi);
  let vF=P.vx*fx+P.vz*fz,vR=P.vx*rx+P.vz*rz;
+ if(P.inWater){const wk=Math.exp(-dt*(.5+.5*clamp(P.wd,0,2)));vF*=wk;vR*=wk;P.wt=(P.wt||0)+dt;if(P.wt>7&&state==='play'){P.wt=0;resetCar()}}else P.wt=0;
  const thr=inp.thr,av0=Math.abs(vF),slip=Math.atan2(Math.abs(vR),Math.max(av0,1));
  const dr=S.drift!==false,canD=dr&&av0>9&&(Math.abs(P.steer)>.12||P.drifting);
  let brk=inp.brk;
@@ -988,12 +1266,14 @@ function stepPlayer(dt,inp){
  const nvF=P.vx*Math.sin(P.psi)+P.vz*Math.cos(P.psi);P.spd=nvF;
  const f2x=Math.sin(P.psi),f2z=Math.cos(P.psi),l2x=-Math.cos(P.psi)*-1,l2z=-Math.sin(P.psi);
  const hs=P.s,ho=td.L*.32;
- const yC=groundAt(P.x,P.z,hs),yF=groundAt(P.x+f2x*ho,P.z+f2z*ho,hs),yB=groundAt(P.x-f2x*ho,P.z-f2z*ho,hs);
+ const yC=groundAt(P.x,P.z,hs,P.y),yF=groundAt(P.x+f2x*ho,P.z+f2z*ho,hs,P.y),yB=groundAt(P.x-f2x*ho,P.z-f2z*ho,hs,P.y);
  const lx=Math.cos(P.psi),lz=-Math.sin(P.psi);
- const yL=groundAt(P.x+lx*.8,P.z+lz*.8,hs),yRt=groundAt(P.x-lx*.8,P.z-lz*.8,hs);
+ const yL=groundAt(P.x+lx*.8,P.z+lz*.8,hs,P.y),yRt=groundAt(P.x-lx*.8,P.z-lz*.8,hs,P.y);
  const k=1-Math.exp(-dt*12);
  P.pitchS+=(Math.atan2(yF-yB,ho*2)-P.pitchS)*k;P.rollS+=(Math.atan2(yL-yRt,1.6)-P.rollS)*k;
- P.y+=(((yC+yF+yB+yL+yRt)/5)-P.y)*(1-Math.exp(-dt*18));
+ {const wl=waterLevelAt(P.x,P.z,P.s,yC);P.wl=wl==null?0:wl;P.wd=wl==null?0:wl-yC;P.inWater=wl!=null&&P.wd>.2;
+  let ty=(yC+yF+yB+yL+yRt)/5;if(P.inWater)ty=Math.max(ty,P.wl-.5);
+  P.y+=(ty-P.y)*(1-Math.exp(-dt*(P.inWater?6:18)))}
  const ax=(nvF-P.vFprev)/Math.max(dt,1e-3);P.vFprev=nvF;P.bob+=(clamp(ax*.004,-.05,.05)-P.bob)*(1-Math.exp(-dt*6));
  gameTimer+=0;dist+=Math.abs(nvF)*dt;
  pcar.userData.spin+=nvF*dt;
@@ -1034,7 +1314,7 @@ function updateCamera(dt){
   if(sh===0){ox=rx*6+fx*Math.sin(cam.shot*.2)*5;oz=rz*6+fz*Math.sin(cam.shot*.2)*5;oy=1.5}
   else if(sh===1){ox=-fx*8-rx*1.5;oz=-fz*8-rz*1.5;oy=1.6}
   else{ox=fx*9-rx*4;oz=fz*9-rz*4;oy=1.3}
-  const tx=P.x+ox,tz=P.z+oz,ty=Math.max(P.y+oy,groundAt(tx,tz,P.s)+.8);
+  const tx=P.x+ox,tz=P.z+oz,ty=Math.max(P.y+oy,camFloor(tx,tz,P.s)+.8);
   if(!cam.init){camera.position.set(tx,ty,tz);cam.init=true}
   const k=1-Math.exp(-dt*1.6);camera.position.x+=(tx-camera.position.x)*k;camera.position.y+=(ty-camera.position.y)*k;camera.position.z+=(tz-camera.position.z)*k;
   camera.lookAt(P.x,P.y+.9,P.z);tfov=46;
@@ -1050,7 +1330,7 @@ function updateCamera(dt){
   const td=CUR.td,d=6.8+sp*.04+Math.max(0,td.L-4.6)*.6,sn=Math.sin(cam.cp),cs=Math.cos(cam.cp);
   const wy=P.y+2.5+sp*.01+Math.max(0,td.roofY-1.6)*.6;cam.y+=(wy-cam.y)*(1-Math.exp(-dt*6));
   let cx=P.x-sn*d,cz=P.z-cs*d,cy=cam.y;
-  cy=Math.max(cy,groundAt(cx,cz,P.s)+.8);
+  cy=Math.max(cy,camFloor(cx,cz,P.s)+.8);
   camera.position.set(cx+(Math.random()-.5)*cam.shake*.25,cy+(Math.random()-.5)*cam.shake*.2,cz);
   camera.lookAt(P.x+sn*8,P.y+1.1,P.z+cs*8);
  }
@@ -1168,7 +1448,7 @@ function emitSmoke(v,dust){
  p.vx=P.vx*.25+(Math.random()-.5)*1.2;p.vz=P.vz*.25+(Math.random()-.5)*1.2;p.vy=.5+Math.random()*.7;
  p.sp.position.set(v.x+(Math.random()-.5)*.3,v.y+.15,v.z+(Math.random()-.5)*.3);
  const lv=lerp(.35,.92,dayF);
- if(dust)p.sp.material.color.setRGB(.62*lv,.5*lv,.36*lv);else p.sp.material.color.setRGB(lv,lv,lv*1.02);
+ if(dust==='water'){p.sp.material.color.setRGB(.8*lv+.12,.9*lv+.07,1);p.vy=1.2+Math.random()*1.4;p.max=.5+Math.random()*.4;p.s1=1.6+Math.random()}else if(dust)p.sp.material.color.setRGB(.62*lv,.5*lv,.36*lv);else p.sp.material.color.setRGB(lv,lv,lv*1.02);
  p.sp.visible=true;p.sp.scale.set(p.s0,p.s0,1);p.sp.material.opacity=0;
 }
 function updateFX(dt){
@@ -1182,6 +1462,7 @@ function updateFX(dt){
   FX.acc+=dt;
   while(FX.acc>.035){FX.acc-=.035;emitSmoke(_wl,!road);emitSmoke(_wr,!road)}
  }else{FX.lastL=FX.lastR=null;FX.acc=0}
+ if(P.inWater&&sp>1.2){FX.wacc=(FX.wacc||0)+dt;const hz=td.L/2,wx=td.W/2;while(FX.wacc>.03){FX.wacc-=.03;for(const sx of[-1,1]){_wl.set(sx*wx,0,hz*.7);pcar.localToWorld(_wl);_wl.y=P.wl-.15;emitSmoke(_wl,'water')}}}
  for(const p of FX.parts){
   if(!p.on)continue;
   p.age+=dt;const t=p.age/p.max;
@@ -1282,6 +1563,7 @@ const TABS=[
   {t:'range',k:'vignette',l:'Vinheta',h:'Escurece as bordas da tela.',min:0,max:100,step:5,f:v=>v+'%'},
   {t:'seg',k:'tint',l:'Tom de cor',o:[['natural','Natural'],['quente','Quente'],['frio','Frio'],['cinema','Cinema']]},
   {t:'tog',k:'skid',l:'Marcas e fumaça dos pneus'},
+  {t:'seg',k:'waterQ',l:'Qualidade da água',h:'Ondas, reflexos do céu, brilho do sol e espuma nas margens.',o:[['auto','Automática'],[0,'Simples'],[1,'Média'],[2,'Alta']]},
   {t:'tog',k:'clouds',l:'Nuvens'}]},
  {id:'snd',name:'Som',items:[
   {t:'range',k:'volume',l:'Volume geral',min:0,max:100,step:5,f:v=>v+'%'},
@@ -1337,6 +1619,7 @@ function onSetting(k){
  if(k==='shadows'||k==='view'||k==='carQ'){S.quality='custom';saveS();applyQuality();buildSettings();return}
  if(k==='scenery'||k==='shadowDist'){S.quality='custom';clearTimeout(onSetting._t);onSetting._t=setTimeout(()=>{saveS();applyQuality()},250);return}
  if(k==='res'||k==='fog'||k==='clouds')applyQuality();
+ if(k==='waterQ')applyAdvancedGraphics();
  if(k==='exposure'||k==='saturation'||k==='vignette'||k==='tint')applyLook();
  if(k==='drift')updateTouchUI();
  if(k==='controls')updateTouchUI();
